@@ -241,6 +241,11 @@ fn test_write_str_escape_search() {
                 let value = format!("{}{}{}", "a".repeat(n), unescaped, "b".repeat(m));
                 let out = format!("\"{}{}{}\"", "a".repeat(n), escaped, "b".repeat(m));
                 test_encode_ok(&[(value, out.as_str())]);
+
+                // Followed by another escape
+                let value = format!("{}{}\n{}", "a".repeat(n), unescaped, "b".repeat(m));
+                let out = format!("\"{}{}\\n{}\"", "a".repeat(n), escaped, "b".repeat(m));
+                test_encode_ok(&[(value, out.as_str())]);
             }
         }
     }

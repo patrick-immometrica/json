@@ -2120,8 +2120,8 @@ where
 }
 
 // Returns the index of the first byte that needs escaping, or bytes.len().
-// Checks a whole chunk at a time like SliceRead::skip_to_escape, then the
-// bytes after the last whole chunk one at a time.
+// Checks a whole chunk at a time like SliceRead::skip_to_escape; strings
+// shorter than a chunk are checked one byte at a time.
 #[inline]
 fn find_escape(bytes: &[u8]) -> usize {
     #[cfg(fast_arithmetic = "64")]
@@ -2132,7 +2132,10 @@ fn find_escape(bytes: &[u8]) -> usize {
     const STEP: usize = mem::size_of::<Chunk>();
     const ONE_BYTES: Chunk = Chunk::MAX / 255; // 0x0101...01
 
-    fn escape_mask(chars: Chunk) -> Chunk {
+    // Sets the high bit of the first byte that needs escaping, and no bit below it.
+    #[inline]
+    fn escape_mask(chunk: &[u8]) -> Chunk {
+        let chars = Chunk::from_le_bytes(chunk.try_into().unwrap());
         let contains_ctrl = chars.wrapping_sub(ONE_BYTES * 0x20) & !chars;
         let chars_quote = chars ^ (ONE_BYTES * Chunk::from(b'"'));
         let contains_quote = chars_quote.wrapping_sub(ONE_BYTES) & !chars_quote;
@@ -2141,20 +2144,38 @@ fn find_escape(bytes: &[u8]) -> usize {
         (contains_ctrl | contains_quote | contains_backslash) & (ONE_BYTES << 7)
     }
 
+    if bytes.len() < STEP {
+        return match bytes.iter().position(|&byte| ESCAPE[byte as usize] != 0) {
+            Some(i) => i,
+            None => bytes.len(),
+        };
+    }
+
+    // Escapes often come in runs, such as "\r\n", which would otherwise cost a
+    // whole chunk each.
+    if ESCAPE[bytes[0] as usize] != 0 {
+        return 0;
+    }
+
     let mut chunks = bytes.chunks_exact(STEP);
     for (n, chunk) in (&mut chunks).enumerate() {
-        let masked = escape_mask(Chunk::from_le_bytes(chunk.try_into().unwrap()));
+        let masked = escape_mask(chunk);
         if masked != 0 {
             return n * STEP + masked.trailing_zeros() as usize / 8;
         }
     }
-
-    let tail = chunks.remainder();
-    let start = bytes.len() - tail.len();
-    match tail.iter().position(|&byte| ESCAPE[byte as usize] != 0) {
-        Some(i) => start + i,
-        None => bytes.len(),
+    if chunks.remainder().is_empty() {
+        return bytes.len();
     }
+
+    // The last chunk overlaps bytes already checked. They hold no escape, so
+    // its first hit, if any, is past them.
+    let last = bytes.len() - STEP;
+    let masked = escape_mask(&bytes[last..]);
+    if masked != 0 {
+        return last + masked.trailing_zeros() as usize / 8;
+    }
+    bytes.len()
 }
 
 const BB: u8 = b'b'; // \x08
